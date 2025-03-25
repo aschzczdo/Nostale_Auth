@@ -217,10 +217,18 @@ class NostaleConnection:
         for byte in data:
             decrypted.append((byte - 15) % 256)
         return decrypted
-    
+        
     def _parse_NsTest(self, ns_test_str):
-        """Parse NsTest packet to extract session and server information."""
-        print(f"Parsing NsTest packet: {ns_test_str}")
+        """
+        Parse NsTest packet to extract session and server information.
+        
+        Args:
+            ns_test_str (str): The NsTeST packet string
+        
+        Returns:
+            tuple: (session_id, servers_dict)
+        """
+        print(f"Parsing NsTest packet...")
         if not ns_test_str.startswith("NsTeST"):
             print("Packet does not start with NsTeST")
             return None, None
@@ -233,22 +241,39 @@ class NostaleConnection:
         session = parts[1]
         servers = {"servers": []}
         
-        # Skip NsTeST and session
-        parts = parts[2:]
-    
-        # Process server info in groups of 4
-        for i in range(0, len(parts), 4):
-            if i + 3 < len(parts):
-                server_info = {
-                    "server_name": parts[i],
-                    "channel": parts[i + 1],
-                    "ip": parts[i + 2],
-                    "port": parts[i + 3]
-                }
-                servers["servers"].append(server_info)
+        # Find server entries (contain IP:PORT:COLOR:SERVER.CHANNEL.NAME format)
+        for part in parts:
+            if ":" in part and "." in part:  # This looks like a server entry
+                try:
+                    server_parts = part.split(":")
+                    if len(server_parts) >= 4:  # IP:PORT:COLOR:SERVER_DATA
+                        ip = server_parts[0]
+                        port = int(server_parts[1])
+                        color = int(server_parts[2])
+                        
+                        # Parse server data
+                        server_data = server_parts[3].split(".")
+                        if len(server_data) >= 3:
+                            world_id = int(server_data[0])
+                            channel_id = int(server_data[1])
+                            server_name = ".".join(server_data[2:])
+                            
+                            # Add to servers list with consistent field names
+                            servers["servers"].append({
+                                "ip": ip,
+                                "port": port,
+                                "color": color,
+                                "world_id": world_id,
+                                "channel_id": channel_id,
+                                "server_name": server_name,  # Use server_name for consistency
+                                "channel": str(channel_id)    # Add channel as string for compatibility
+                            })
+                except Exception as e:
+                    print(f"Error parsing server entry '{part}': {e}")
         
         return session, servers
-    
+
+        
     def get_NsTest(self, server, channel):
         """
         Connect to the login server and get NsTest packet.

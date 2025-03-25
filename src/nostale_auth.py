@@ -7,9 +7,18 @@ from datetime import datetime
 import urllib.parse
 import time
 import hashlib
+import os
+import logging
+from captcha_solver import solve_captcha_manual
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("NostaleAuth")
+
 class NostaleAuth:
     """
     Class for handling authentication with Gameforge for Nostale.
+    Updated with captcha handling and token persistence.
     """
     
     def __init__(self, identity_path, installation_id=None, proxy=False, proxy_ip="", proxy_port="", 
@@ -37,6 +46,7 @@ class NostaleAuth:
         self.browser_user_agent = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/72.0.3626.121 Safari/537.36"
         self.installation_id = installation_id if installation_id else str(uuid.uuid4())
         self.token = ""
+        self.token_file = f"{os.path.dirname(identity_path)}/token_{self.installation_id.split('-')[0]}.json"
         
         # Initialize proxy settings
         self.proxy_ip = proxy_ip
@@ -47,6 +57,9 @@ class NostaleAuth:
         
         # Initialize certificate and version info
         self.init_gf_version()
+        
+        # Try to load existing token
+        self._load_token()
     
     def get_proxies(self):
         """Get proxy configuration for requests."""
@@ -63,17 +76,27 @@ class NostaleAuth:
         }
         return proxies
     
-    def authenticate(self, email, password):
+    def authenticate(self, email, password, handle_captcha=True):
         """
         Authenticate with Gameforge.
         
         Args:
             email (str): Email address
             password (str): Password
+            handle_captcha (bool): Whether to handle captchas interactively
             
         Returns:
             tuple: (success, challenge_id, wrong_credentials)
         """
+        # Check if we already have a valid token
+        if self.token:
+            # Verify token validity by getting accounts
+            test_accounts = self.get_accounts()
+            if test_accounts:
+                logger.info("Using existing token (still valid)")
+                return True, "", False
+            logger.info("Existing token expired, re-authenticating")
+        
         url = "https://spark.gameforge.com/api/v1/auth/sessions"
         headers = {
             "Content-Type": "application/json",
@@ -115,6 +138,17 @@ class NostaleAuth:
                     # CAPTCHA required
                     challenge_id = response.headers.get('gf-challenge-id', '').split(';')[0]
                     print(f"CAPTCHA required, challenge ID: {challenge_id}")
+                    
+                    if handle_captcha:
+                        # Try to solve the captcha
+                        print("Attempting to solve captcha...")
+                        if solve_captcha_manual(challenge_id, self.locale):
+                            print("Captcha solved successfully, retrying authentication")
+                            # Captcha solved, retry auth
+                            return self.authenticate(email, password, handle_captcha)
+                        else:
+                            print("Failed to solve captcha")
+                    
                     return False, challenge_id, False
                 elif response.status_code == 403:
                     # Wrong credentials
@@ -129,11 +163,16 @@ class NostaleAuth:
             json_response = response.json()
             self.token = json_response.get("token", "")
             print("Authentication successful!")
+            
+            # Save token for future use
+            self._save_token()
+            
             return True, "", False
             
         except Exception as e:
             print(f"Error during authentication: {e}")
             return False, "", False
+            
     def get_client_version(self):
         """Get the client version from Gameforge."""
         url = "http://dl.tnt.gameforge.com/tnt/final-ms3/clientversioninfo.json"
@@ -206,6 +245,7 @@ class NostaleAuth:
             final_hash = hashlib.sha256(hash_sum.encode()).hexdigest()
             
             return final_hash[-8:]
+            
     def get_accounts(self):
         """
         Get game accounts associated with the authenticated Gameforge account.
@@ -487,3 +527,33 @@ class NostaleAuth:
         
         # Certificate from the original code
         self.cert = "-----BEGIN CERTIFICATE-----\nMIIC1jCCAb6gAwIBAgIUGrzMmL1EyuyvfowIQTbYaEXcABgwDQYJKoZIhvcNAQEL\nBQAwcTELMAkGA1UEBhMCREUxEjAQBgNVBAgTCUthcmxzcnVoZTEbMBkGA1UEBxMS\nQmFkZW4tV3VlcnR0ZW1iZXJnMRowGAYDVQQKExFHYW1lZm9yZ2UgNEQgR21iSDEV\nMBMGA1UEAxMMRXZlbnQgSW5nZXN0MB4XDTIyMDQwNjA5NDgwMFoXDTI3MDQwNTA5\nNDgwMFowHjEcMBoGA1UEAxMTRXZlbnQgSW5nZXN0IENsaWVudDBZMBMGByqGSM49\nAgEGCCqGSM49AwEHA0IABB8rLOihh0grHRUKuBouT0DgmByjAXxbX1F18fDYTRLI\nbXA3WxjN2HHHrGQEUVuuwQ08TcwpZL6EA+r/OvV9gIqjgYMwgYAwDgYDVR0PAQH/\nBAQDAgWgMBMGA1UdJQQMMAoGCCsGAQUFBwMCMAwGA1UdEwEB/wQCMAAwHQYDVR0O\nBBYEFDmjgYgc0Pj23L9ISbFRXGpoNWRhMB8GA1UdIwQYMBaAFJhLFyWCrwgACm0N\nGZ0tV6wg5drlMAsGA1UdEQQEMAKCADANBgkqhkiG9w0BAQsFAAOCAQEAcAE+lc0Q\nxrqST4G6RBOy1UziTIdpgBcUDI6k5qF4RjmbTyMSqXPDZn4swq6xo292FRMh1W7I\nq27NtIw0trd3w06yNB65Vb+GgwWlktMtgRArzK20DJunvRfA2B8JU2tuXYJE1w0u\nwBnhqFDO+wUrlEakgNQivEWegfLkGtDzyxsePSyasrhf6XQhkm/QiTnFRK4FLmyi\nibx0gFOKhfung+2Xc8P1L0ySE63m0hPXB3mSYwMHDzfEZc8grjb2b4fGOohDNUTB\nhLIq+2Uqm1nt5BovZhOoDY/iqQH+qTWqt8ixkasITdEY3wvMj4eivOOtT/TsqLNe\nGuGmotYzIhnzhA==\n-----END CERTIFICATE-----"
+    
+    def _save_token(self):
+        """Save token to file for persistence."""
+        try:
+            with open(self.token_file, 'w') as f:
+                data = {
+                    "token": self.token,
+                    "installation_id": self.installation_id,
+                    "timestamp": time.time()
+                }
+                json.dump(data, f)
+                print(f"Token saved to {self.token_file}")
+        except Exception as e:
+            print(f"Error saving token: {e}")
+    
+    def _load_token(self):
+        """Load token from file if it exists."""
+        try:
+            if os.path.exists(self.token_file):
+                with open(self.token_file, 'r') as f:
+                    data = json.load(f)
+                    # Check that the installation ID matches and token is not too old (2 hours max)
+                    if (data.get("installation_id") == self.installation_id and 
+                            time.time() - data.get("timestamp", 0) < 7200):  # 2 hours
+                        self.token = data.get("token", "")
+                        print(f"Loaded token from {self.token_file}")
+                    else:
+                        print("Token too old or installation ID mismatch, will re-authenticate")
+        except Exception as e:
+            print(f"Error loading token: {e}")
