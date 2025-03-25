@@ -1,5 +1,3 @@
-# Clientless Bot Testing Repository
-
 This repository is dedicated to experimenting with a clientless bot. Please note that this is a temporary project, and the current README is subject to change.
 
 ## External Libraries Used
