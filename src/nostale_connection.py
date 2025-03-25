@@ -7,6 +7,7 @@ import random
 import requests
 import pefile
 from typing import Dict, Tuple, List, Any
+from noscrypto import Client, Server
 
 class NostaleConnection:
     def __init__(self, token, installation_id, resources_path):
@@ -158,47 +159,40 @@ class NostaleConnection:
             print(f"Error extracting version info: {e}")
 
         return props["FileVersion"]
-    
     def get_NoS0577_packet(self):
-        """Generate NoS0577 packet to match Qt implementation."""
+        """Generate NoS0577 packet to match the working implementation."""
         self.update_clients()
-
-        # Print the original token
-        print(f"\nOriginal token before conversion: {self.token}")
         
+        # Convert token to hexadecimal
         session_token = self.convert_to_hexadecimal(self.token)
         
-        # Generate random hex value like Qt version (random 100-999 to hex)
-        random_decimal = random.randint(100, 999)
-        random_hex_value = format(random_decimal, 'x')
+        # Generate random hex value (using the working implementation approach)
+        random_value = random.randint(0x00000000, 0x00FFFFFF)
+        random_hex_value = format(random_value, '08X')
         
         client_version = self.get_client_version(os.path.join(self.resources_path, "NostaleClientX.exe"))
         
-        # Calculate MD5 as in Qt version
+        # Calculate MD5 as in the working implementation
         def calculate_md5(file_path):
             with open(file_path, 'rb') as file:
                 data = file.read()
                 md5_hash = hashlib.md5(data).hexdigest().upper()
                 return md5_hash
-                
+        
         md5_clientX = calculate_md5(os.path.join(self.resources_path, "NostaleClientX.exe"))
         md5_client = calculate_md5(os.path.join(self.resources_path, "NostaleClient.exe"))
         concatenated_md5 = md5_clientX + md5_client
         md5 = hashlib.md5(concatenated_md5.encode()).hexdigest().upper()
         
-        # Qt format: "region_code + " " + QChar(0xB) + " " + client_version"
-        # Using "0" as region_code like in our previous implementation
-        region_and_version = "0 " + chr(0xB) + " " + client_version
+        # Create packet exactly as in the working implementation
+        packet = "NoS0577 " + session_token + "  " + self.installation_id + " " + random_hex_value + " 0" + chr(0xB) + client_version + " 0 " + md5
         
-        # Combine into final packet
-        packet = f"NoS0577 {session_token}  {self.installation_id} {random_hex_value} 0{chr(0xB)}{client_version} 0 {md5}"
-        
-        # Print detailed information for debugging
-        print("\nNoS0577 Packet Details:")
+        # Print for debugging
+        print(f"\nNoS0577 Packet Details:")
         print(f"Session Token: {session_token}")
         print(f"Installation ID: {self.installation_id}")
         print(f"Random Hex: {random_hex_value}")
-        print(f"Region and Version: {region_and_version}")
+        print(f"Client Version: {client_version}")
         print(f"MD5: {md5}")
         print(f"Complete Packet: {packet}")
         print(f"Packet Length: {len(packet)}")
@@ -287,13 +281,16 @@ class NostaleConnection:
             # Connect to login server
             print(f"Connecting to login server at {login_server_ip}:{login_server_port}")
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            client_socket.settimeout(10)  # Set a 10-second timeout
+            client_socket.settimeout(30)  # Increased timeout to 30 seconds
             client_socket.connect((login_server_ip, login_server_port))
             
-            # Send encrypted packet
-            NoS0577_encrypted = self.login_encrypt(NoS0577.encode("ascii"))
+            # Use NosCrypto Client for encryption
+            NoS0577_encrypted = Client.LoginEncrypt(NoS0577.encode("ascii"))
             print(f"Sending encrypted NoS0577 packet (length: {len(NoS0577_encrypted)})")
             client_socket.send(NoS0577_encrypted)
+            
+            # Small delay before trying to receive
+            time.sleep(0.5)
             
             # Receive response with timeout handling
             print("Waiting for server response...")
@@ -301,7 +298,8 @@ class NostaleConnection:
                 data = client_socket.recv(65536)
                 if data:
                     print(f"Received data of length: {len(data)}")
-                    NsTest = self.login_decrypt(data).decode("ascii", errors="replace")
+                    # Use NosCrypto Client for decryption
+                    NsTest = Client.LoginDecrypt(data).decode("ascii", errors="replace")
                     print(f"Decrypted NsTest packet: {NsTest}")
                     
                     session, servers = self._parse_NsTest(str(NsTest))
